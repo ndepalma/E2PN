@@ -185,7 +185,7 @@ tar --exclude='.DS_Store' -czf ModelNet40.tar.gz ModelNet40
 **3. In the RunPod console: create the Pod.**
 
 - Add your SSH public key once under Settings (`cat ~/.ssh/id_ed25519.pub`).
-- Deploy a GPU Pod (for example an RTX A6000) from the official **PyTorch** template, such as `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`.
+- Deploy a GPU Pod (for example an RTX A6000) from the official **PyTorch** template, such as `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`. In that tag `1.0.2` is RunPod's image version, `torch280` is PyTorch 2.8.0 and `cu1281` is CUDA 12.8.1. Any template with PyTorch 2.1 or newer works; pick the newest one offered.
 - Keep the volume mounted at `/workspace` (20 GB is plenty: the dataset is about 2 GB and checkpoints are about 11 MB each) and keep TCP port 22 exposed.
 - For Weights & Biases logging, add the environment variable `WANDB_API_KEY` with your key.
 
@@ -212,12 +212,13 @@ ls ModelNet40 | wc -l          # expect 40 categories
 cd /workspace
 git clone https://github.com/YOUR_GITHUB_USER/E2PN.git
 cd E2PN
+pip install --ignore-installed blinker   # the image's blinker comes from apt and pip cannot uninstall it
 pip install -r requirements.txt
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 python -m pytest vgtk/tests
 ```
 
-`torch.cuda.is_available()` must print `True`, and the tests should pass. After a Pod stop and restart, run `pip install -r requirements.txt` again.
+`torch.cuda.is_available()` must print `True`, and the tests should pass. After a Pod stop and restart, run both `pip install` commands again.
 
 **6. On the Pod: train.** `nohup` keeps the run alive if your SSH session drops.
 
