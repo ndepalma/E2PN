@@ -16,6 +16,12 @@ exp_args.add_argument('--model-dir', type=str, default='trained_models/models',
                       help='path to models (the root of all outputs)')
 exp_args.add_argument('-s', '--seed', type=int, default=2913,
                       help='random seed')
+exp_args.add_argument('--device', type=str, default='auto',
+                      help='auto | mps | cuda | cpu (auto picks mps, then cuda, then cpu)')
+exp_args.add_argument('--wandb', action='store_true',
+                      help='log training / test metrics to Weights & Biases (needs `pip install wandb` and `wandb login`)')
+exp_args.add_argument('--wandb-project', type=str, default='E2PN',
+                      help='Weights & Biases project name')
 exp_args.add_argument('--run-mode', type=str, default='train',
                       help='train | eval | test')
 

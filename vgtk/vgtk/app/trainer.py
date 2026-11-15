@@ -19,20 +19,22 @@ class Trainer():
     def __init__(self, opt):
         super(Trainer, self).__init__()
 
-        opt_dict = vgtk.dump_args(opt)
         self.check_opt(opt)
+        opt_dict = vgtk.dump_args(opt)
+        opt_dict['device'] = str(self.opt.device)
 
         # set random seed
         random.seed(self.opt.seed)
         np.random.seed(self.opt.seed)
         torch.backends.cudnn.deterministic = True
         torch.manual_seed(self.opt.seed)
-        torch.cuda.manual_seed_all(self.opt.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.opt.seed)
         # np.set_printoptions(precision=3, suppress=True)
 
         # create model dir
         experiment_id = self.opt.experiment_id if self.opt.mode == 'train' else f"{self.opt.experiment_id}_{self.opt.mode}"
-        model_id = f'model_{time.strftime("%Y%m%d_%H:%M:%S")}'
+        model_id = f'model_{time.strftime("%Y%m%d_%H-%M-%S")}'
         self.root_dir = os.path.join(self.opt.model_dir, experiment_id, model_id)
         os.makedirs(self.root_dir, exist_ok=True)
 
@@ -77,12 +79,47 @@ class Trainer():
         # setup summary
         self.summary = vgtk.Summary()
 
+        # optional Weights & Biases logging (--wandb)
+        self._setup_wandb(opt_dict, experiment_id)
+        self.summary.on_update = self._log_train_stats
+
         # setup timer
         self.timer = vgtk.Timer()
         self.summary.register(['Time'])
 
         # done
         self.logger.log('Setup', 'Setup finished!')
+
+    def _setup_wandb(self, opt_dict, experiment_id):
+        self.wandb_run = None
+        self._log_step = 0
+        if not getattr(self.opt, 'wandb', False):
+            return
+        try:
+            import wandb
+        except ImportError:
+            self.logger.warning('Setup', '--wandb was given but the wandb package is not installed; continuing without it.')
+            return
+        self.wandb_run = wandb.init(project=self.opt.wandb_project, name=experiment_id,
+                                    config=opt_dict, dir=self.root_dir)
+        self.logger.log('Setup', f'Logging to Weights & Biases: {self.wandb_run.name}')
+
+    def log_metrics(self, metrics, step=None):
+        """Send metrics to Weights & Biases (no-op unless --wandb). Without a
+        step, the latest training step is used."""
+        if self.wandb_run is None:
+            return
+        if step is not None:
+            self._log_step = max(self._log_step, step)
+        self.wandb_run.log(metrics, step=self._log_step)
+
+    def _log_train_stats(self, stats, step):
+        if self.wandb_run is None:
+            return
+        metrics = {f'train/{k}': v for k, v in stats.items()}
+        if 'Time' not in stats and hasattr(self, 'lr_schedule'):
+            metrics['train/lr'] = self.lr_schedule.lr
+        self.log_metrics(metrics, step)
 
     def train(self):
         self.opt.mode = 'train'
@@ -137,7 +174,7 @@ class Trainer():
     # TODO: check that the options have the required key collection
     def check_opt(self, opt, print_opt=True):
         self.opt = opt
-        self.opt.device = torch.device('cuda') # torch.device('cuda') 'cpu'
+        self.opt.device = vgtk.ops.get_device(getattr(opt, 'device', None))
 
     def _print_running_stats(self, step):
         stats = self.summary.get()
@@ -202,12 +239,22 @@ class Trainer():
             return
         self.logger.log('Setup', f'Resume from checkpoint: {resume_path}')
 
-        state_dicts = torch.load(resume_path)
+        # Load on CPU: load_state_dict copies the values onto the model's device.
+        # (thop's FLOP counter leaves float64 `total_ops` / `total_params` buffers in
+        # checkpoints, and float64 cannot be mapped to MPS.)
+        state_dicts = torch.load(resume_path, map_location='cpu')
+        profiler_keys = ('total_ops', 'total_params')
+        # constant index tables that older checkpoints stored (now rebuilt at construction)
+        legacy_keys = ('basic_conv.idxs_k', 'basic_conv.idxs_a')
+        state_dicts = {k: v for k, v in state_dicts.items() if not k.endswith(profiler_keys + legacy_keys)}
 
         training_flag = self.model.training
         self.model.eval()
         # self.model = nn.DataParallel(self.model)
-        self.model.load_state_dict(state_dicts)
+        missing, unexpected = self.model.load_state_dict(state_dicts, strict=False)
+        missing = [k for k in missing if not k.endswith(profiler_keys)]
+        if missing or unexpected:
+            raise RuntimeError(f'Checkpoint does not match the model. Missing keys: {missing}; unexpected keys: {unexpected}')
         # self.model = self.model.module
         # self.optimizer.load_state_dict(state_dicts['optimizer'])
         # self.start_epoch = state_dicts['epoch']

@@ -2,7 +2,7 @@
 import numpy as np
 import torch
 
-import vgtk.cuda.gathering as cuda_gather
+from vgtk import ops
 
 
 # promote input in batch
@@ -23,7 +23,7 @@ def promote_input_np(x, n_dim):
 
 # gather operators with batch
 def batch_gather(x, idx, dim=1):
-    x = cuda_gather.gather_points_forward(x, idx.int())
+    x = ops.gather_points(x, idx)
     return x
 
 def batch_zip(x, y, idx):

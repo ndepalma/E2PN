@@ -12,8 +12,14 @@ from SPConvNets.datasets.evaluation.retrieval import modelnet_retrieval_mAP
 from SPConvNets.models.cls_so3net_vx import ClsSO3VoxConvModel
 import time
 import matplotlib.pyplot as plt
-from thop import profile
-from fvcore.nn import FlopCountAnalysis
+try:
+    from thop import profile
+except ImportError:     # optional, only used to report FLOPs
+    profile = None
+try:
+    from fvcore.nn import FlopCountAnalysis
+except ImportError:     # optional, only used to report FLOPs
+    FlopCountAnalysis = None
 
 class DatasetInitializer:
     def __init__(self, opt):
@@ -107,8 +113,8 @@ def val(dataset_test, model, metric, best_acc, test_accs, device, logger, info):
     info_print = info if info == '' else info+': '
     logger.log('Testing', info_print+'Best accuracy so far is %.2f!!!!'%(best_acc))
 
-    mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-    torch.cuda.reset_peak_memory_stats()
+    mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+    vgtk.ops.reset_peak_memory_stats()
     logger.log('Testing', f'Mem: {mem_used_max_GB:.3f}GB')
     
     n = 1
@@ -249,8 +255,8 @@ class Trainer(vgtk.Trainer):
     def _print_running_stats(self, step):
         stats = self.summary.get()
         
-        mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-        torch.cuda.reset_peak_memory_stats()
+        mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+        vgtk.ops.reset_peak_memory_stats()
         mem_str = f', Mem: {mem_used_max_GB:.3f}GB'
 
         self.logger.log('Training', f'{step}: {stats}'+mem_str)
@@ -264,7 +270,7 @@ class Trainer(vgtk.Trainer):
         self.logger.log('Testing','Evaluating test set!'+info)
         self.model.eval()
         self.metric.eval()
-        torch.cuda.reset_peak_memory_stats()
+        vgtk.ops.reset_peak_memory_stats()
 
         with torch.no_grad():
             

@@ -1,5 +1,4 @@
 from importlib import import_module
-from telnetlib import NEW_ENVIRON
 from SPConvNets import Dataloader_ModelNet40, Dataloader_ModelNet40Alignment
 from tqdm import tqdm
 import torch
@@ -68,7 +67,7 @@ def visualize_pointcloud(points, normals=None,
 class DatasetInitializerRot:
     def __init__(self, opt):
         self.opt = opt
-        self.opt.device = torch.device('cuda')
+        self.opt.device = vgtk.ops.get_device(getattr(opt, 'device', None))
         log_path = 'log_inspect_equiv.txt'
         self.logger = vgtk.Logger(log_file=log_path)
         self.logger.log('DatasetInitializerRot', f'Logger created! Hello World!')
@@ -309,8 +308,8 @@ class Trainer(vgtk.Trainer):
     def _print_running_stats(self, step):
         stats = self.summary.get()
         
-        mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-        torch.cuda.reset_peak_memory_stats()
+        mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+        vgtk.ops.reset_peak_memory_stats()
         mem_str = f', Mem: {mem_used_max_GB:.3f}GB'
         
         self.logger.log('Training', f'{step}: {stats}'+mem_str)
@@ -324,7 +323,7 @@ class Trainer(vgtk.Trainer):
         self.logger.log('Testing','Evaluating test set!')
         self.model.eval()
         self.metric.eval()
-        torch.cuda.reset_peak_memory_stats()
+        vgtk.ops.reset_peak_memory_stats()
 
         all_error = []
         all_acc = []
@@ -372,9 +371,13 @@ class Trainer(vgtk.Trainer):
             self.logger.log('Testing', 'Error std is %.3f degree!!!!'%(std_error))
             
             self.logger.log('Testing', 'Best mean angular error so far is %.2f degree!!!!'%(self.best_acc))
+            self.log_metrics({'test/mean_angular_error_deg': mean_error,
+                              'test/median_angular_error_deg': np.median(all_error) * 180 / np.pi,
+                              'test/classifier_acc': mean_acc,
+                              'test/best_mean_angular_error_deg': self.best_acc})
             
-            mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-            torch.cuda.reset_peak_memory_stats()
+            mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+            vgtk.ops.reset_peak_memory_stats()
             self.logger.log('Testing', f'Mem: {mem_used_max_GB:.3f}GB')
             
             if self.exp_name is not None:

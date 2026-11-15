@@ -108,11 +108,11 @@ def batch_rotate_point_cloud(data, R = None):
       rotation_matrix = rotation_angle[:3, :3]
     
     # since we are using pytorch...
-    rotation_matrix = torch.from_numpy(rotation_matrix).to(data.device)
+    rotation_matrix = torch.from_numpy(np.asarray(rotation_matrix, dtype=np.float32)).to(data.device)
     rotation_matrix = rotation_matrix[None].repeat(data.shape[0],1,1)
 
     # Bx3x3, Bx3xN ->Bx3xN
-    rotated_data = torch.matmul(rotation_matrix.double(), data.transpose(1,2).double())
+    rotated_data = torch.matmul(rotation_matrix, data.transpose(1,2).float())
     return rotated_data.transpose(1,2).contiguous().float(), rotation_matrix.float()
 
 

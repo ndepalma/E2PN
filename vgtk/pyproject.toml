@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vgtk"
+version = "0.0.2"
+description = "Vision-Graphics deep learning ToolKit (pure PyTorch, no compiled extension)"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "torch>=2.1",
+    "scipy",
+    "scikit-learn",
+    "plyfile",
+    "tensorboard",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["vgtk*"]
+
+[tool.setuptools.package-data]
+"vgtk.data.anchors" = ["*.ply", "*.npz"]

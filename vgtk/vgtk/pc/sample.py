@@ -2,7 +2,7 @@ import time
 import numpy as np
 import torch
 
-import vgtk.cuda.grouping as cuda_nn
+from vgtk import ops
 import vgtk.utils as utils
 
 '''
@@ -55,7 +55,7 @@ def ball_query_index(query_points, support_points, radius, n_sample):
     # TODO remove permute
     # query_points = query_points.permute(0,2,1).contiguous()
     # support_points = support_points.permute(0,2,1).contiguous()
-    idx = cuda_nn.ball_query(query_points, support_points, radius, n_sample)
+    idx = ops.ball_query(query_points, support_points, radius, n_sample)
     return idx
 
 
@@ -68,7 +68,7 @@ def furthest_sample_index(pc, n_sample, lazy_sample):
 
     # TODO
     # pc = pc.permute(0,2,1).contiguous()
-    rst = cuda_nn.furthest_point_sampling(pc, n_sample)
+    rst = ops.furthest_point_sampling(pc, n_sample)
     return rst
 
 # [b, 3, n] x [m] -> [b, m] x [b, 3, m]

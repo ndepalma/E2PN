@@ -11,9 +11,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 # from utils_cuda import _neighbor_query, _spherical_conv
 import vgtk
 import vgtk.pc as pctk
-import vgtk.cuda.zpconv as cuda_zpconv
-import vgtk.cuda.gathering as gather
-import vgtk.cuda.grouping as cuda_nn
+from vgtk import ops
 
 
 # load anchors -> [na, 3]
@@ -98,10 +96,12 @@ def add_shadow_feature(x):
 ################################# Gathering ##############################
 
 
-class Gathering(torch.autograd.Function):
+class Gathering:
+    """Gather points by index. Kept for API compatibility (``Gathering.apply``);
+    the gradient now comes from autograd instead of a hand-written CUDA kernel."""
 
     @staticmethod
-    def forward(ctx, points, idx):
+    def apply(points, idx):
         '''
         Params:
             points: [nb, c_in, np]
@@ -109,23 +109,7 @@ class Gathering(torch.autograd.Function):
         Returns:
             gathered_points: [nb, c_in, m]
         '''
-        gathered_points = gather.gather_points_forward(points, idx)
-        ctx.save_for_backward(idx, points)
-        return gathered_points
-
-    @staticmethod
-    def backward(ctx, grad_gathered_points):
-        '''
-        Params:
-            grad_gathered_points: [nb, m, c_in]
-            idx: [nb, m]
-        Returns:
-            grad_points: [nb, np, c_in]
-        '''
-        idx, points = ctx.saved_tensors
-        np = points.size(2)
-        grad_points = gather.gather_points_backward(grad_gathered_points.contiguous(), idx, np)
-        return grad_points, None
+        return ops.gather_points(points, idx)
 
 
 ################################# Intra ZPConv ##############################
@@ -207,53 +191,13 @@ def get_intra_kernel_weights(anchor_in, anchor_out, kernels, ann, aperature, sig
 
 
 # intra zpconv grouping
-class IntraZPConvGrouping(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, intra_idx, intra_w, feats):
-        '''
-        Params:
-            intra_idx:  [na_out, ann]
-            intra_w:    [na_out, ks, ann]
-            feats:      [nb, c_in, np, na_in]
-        Returns:
-            grouped_feats:  [nb, c_in, ks, np, na_out]
-        '''
-        grouped_feats = cuda_zpconv.intra_zpconv_forward(intra_idx,
-                                                         intra_w,
-                                                         feats)
-        ctx.save_for_backward(intra_idx, intra_w, feats)
-        return grouped_feats
-
-    @staticmethod
-    def backward(ctx, grad_grouped_feats):
-
-        intra_idx, intra_w, feats = ctx.saved_tensors
-        anchor_in = feats.shape[3]
-        grad_feats = cuda_zpconv.intra_zpconv_backward(intra_idx,
-                                                       intra_w,
-                                                       grad_grouped_feats.contiguous(),
-                                                       anchor_in)
-        return None, None, grad_feats
-
+# (the CUDA kernel was replaced by the equivalent torch implementation below)
 def intra_zpconv_grouping(intra_idx, intra_w, feats):
-    torch.cuda.synchronize()
-    end = time.time()
-
-    new_feats = IntraZPConvGrouping.apply(intra_idx, intra_w, feats)
-
-    # torch.cuda.synchronize()
-    # print('timer5:', time.time()-end, new_feats.shape)
-    # end = time.time()
-
-    return new_feats
+    return intra_zpconv_grouping_naive(intra_idx, intra_w, feats)
 
 def intra_zpconv_grouping_naive(intra_idx, intra_w, feats):
     a, k, nn = intra_w.shape
     b, c, p, _ = feats.shape
-
-    torch.cuda.synchronize()
-    end = time.time()
 
     # new_feats = feats[..., intra_idx.long()]
     new_feats = torch.index_select(feats, 3, intra_idx.long().view(-1)).view(b, c, p, a, nn)
@@ -309,31 +253,6 @@ def get_sphere_kernels(radius, kernel_size, add_zero=True):
     if add_zero:
         kernels = np.vstack((kernels,np.array([0,0],dtype=np.float32)))
     return kernels
-
-class InterZPConvGrouping(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, inter_idx, inter_w, feats):
-        '''
-        Params:
-            inter_idx:  [nb, np, na, ks, ann]
-            inter_w:    [nb, np, na, ks, ann]
-            feats:      [nb, c_in, nq+1, na]
-        Returns:
-            grouped_feats:  [nb, c_in, ks, np, na]
-        '''
-        grouped_feats = cuda_zpconv.inter_zpconv_forward(inter_idx, inter_w, feats)
-        ctx.save_for_backward(inter_idx, inter_w, feats)
-        return grouped_feats
-
-    @staticmethod
-    def backward(ctx, grad_grouped_feats):
-        inter_idx, inter_w, feats = ctx.saved_tensors
-        grad_feats = cuda_zpconv.inter_zpconv_backward(inter_idx, inter_w,
-                                                       grad_grouped_feats.contiguous(), feats.size(2))
-        return None, None, grad_feats
-
-
 
 def ball_query(query_points, support_points, radius, n_sample, support_feats=None):
     """[b, 3, n] x [b, 3, m] x r x k x [b, c, m] ->

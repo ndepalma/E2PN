@@ -11,9 +11,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 # from utils_cuda import _neighbor_query, _spherical_conv
 import vgtk
 import vgtk.pc as pctk
-import vgtk.cuda.zpconv as cuda_zpconv
-import vgtk.cuda.gathering as gather
-import vgtk.cuda.grouping as cuda_nn
+from vgtk import ops
 
 import vgtk.spconv as zpconv
 
@@ -102,7 +100,7 @@ def get_sphereical_kernel_points_from_ply(radius, kernel_size):
 #     at::Tensor kernel_points, // [ks, na, 3]
 #     const float radius, const float sigma)
 def initial_anchor_query(frag, centers, kernels, r, sigma):
-    return cuda_nn.initial_anchor_query(centers, frag, kernels, r, sigma)
+    return ops.initial_anchor_query(centers, frag, kernels, r, sigma)
 
 
 def inter_so3conv_blurring(xyz, feats, n_neighbor, radius, stride,

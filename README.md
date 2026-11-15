@@ -12,7 +12,8 @@ This repository contains the official code for the CVPR 2023 paper **E2PN: Effic
 1. [Introduction](#introduction)
 2. [Usage](#usage)
 3. [Experiments](#experiments)
-4. [Contacts](#contacts)
+4. [Running on RunPod](#running-on-runpod)
+5. [Contacts](#contacts)
 
 ## Introduction
 
@@ -27,10 +28,27 @@ It mainly includes a SE(3)-equivariant convolution on $S^2\times \mathbb{R}^3$ w
 ## Usage
 Our code is developed based on an open-sourced existing work [EPN](https://github.com/nintendops/EPN_PointCloud). We use the same dependencies as the [EPN](https://github.com/nintendops/EPN_PointCloud) repository. 
 
-The code has been tested on Python 3.7.12, PyTorch 1.11.0 and CUDA 11.3.1. The module and additional dependencies can be set up with 
+The original code was written for Python 3.7, PyTorch 1.11 and CUDA 11.3, and needed a compiled CUDA extension. This version is pure PyTorch: it runs on Apple Silicon (MPS), CUDA or CPU with no build step. It has been tested with Python 3.14 and PyTorch 2.15 on macOS (MPS and CPU).
+
 ```
-cd vgtk
-python setup.py build_ext --inplace
+pip install -r requirements.txt
+```
+
+The run scripts add `vgtk` to the path themselves; `pip install -e vgtk` is optional.
+
+The device is chosen automatically (MPS, then CUDA, then CPU). Use `--device cpu|mps|cuda` in the `experiment` group to override it, e.g. `python run_modelnet.py experiment --device cpu ...`.
+
+**Logging.** Each run writes `log.txt`, `opt.json` and checkpoints under `--model-dir/<experiment-id>/model_<timestamp>/`. To also log loss, accuracy, learning rate and test metrics to Weights & Biases, run `wandb login` once and add `--wandb` (and optionally `--wandb-project NAME`, default `E2PN`) to the `experiment` group:
+
+```
+python run_modelnet.py experiment --experiment-id cls_s2 --wandb --model-dir PATH_TO_LOG -d PATH_TO_MODELNET40 \
+model --flag permutation --kanchor 12 --feat-all-anchors --drop_xyz
+```
+
+The former CUDA kernels (ball query, furthest point sampling, gathering, anchor query) live in `vgtk/vgtk/ops.py`. To check them against reference implementations of the original kernels, and to check the rotation anchors:
+
+```
+python -m pytest vgtk/tests
 ```
 
 ## Experiments
@@ -142,6 +160,98 @@ python run_3dmatch.py experiment --experiment-id inv_s2 --run-mode eval \
 --model-dir PATH_TO_LOG -d PATH_TO_3DMATCH_EVAL -r PATH_TO_CKPT \
 model --kanchor 12
 ```
+
+## Running on RunPod
+
+These steps use RunPod's official PyTorch template and install the code on the Pod (no custom Docker image). They follow the RunPod documentation, but **this code has not yet been run on CUDA or on RunPod**, so treat the first run as a test and run step 5 before training.
+
+Placeholders used below: `YOUR_GITHUB_USER` (a fork that contains this version of the code), `POD_IP` and `POD_PORT` (shown in the Pod's **Connect** tab under "SSH over exposed TCP"), and `~/.ssh/id_ed25519` (your SSH key).
+
+**1. On your Mac: push the code to a repository you can clone.**
+
+```bash
+cd ~/projects/E2PN
+git remote add fork https://github.com/YOUR_GITHUB_USER/E2PN.git
+git push fork HEAD:main
+```
+
+**2. On your Mac: pack the dataset.** ModelNet40 is about 12,000 small files, so send it as one archive.
+
+```bash
+cd ~
+tar --exclude='.DS_Store' -czf ModelNet40.tar.gz ModelNet40
+```
+
+**3. In the RunPod console: create the Pod.**
+
+- Add your SSH public key once under Settings (`cat ~/.ssh/id_ed25519.pub`).
+- Deploy a GPU Pod (for example an RTX A6000) from the official **PyTorch** template, such as `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`.
+- Keep the volume mounted at `/workspace` (20 GB is plenty: the dataset is about 2 GB and checkpoints are about 11 MB each) and keep TCP port 22 exposed.
+- For Weights & Biases logging, add the environment variable `WANDB_API_KEY` with your key.
+
+Only `/workspace` survives a Pod stop. Everything else, including pip-installed packages, is reset.
+
+**4. Copy the dataset to the Pod and connect.**
+
+```bash
+# on your Mac
+scp -P POD_PORT -i ~/.ssh/id_ed25519 ~/ModelNet40.tar.gz root@POD_IP:/workspace/
+ssh root@POD_IP -p POD_PORT -i ~/.ssh/id_ed25519
+```
+
+```bash
+# on the Pod
+cd /workspace
+tar -xzf ModelNet40.tar.gz && rm ModelNet40.tar.gz
+ls ModelNet40 | wc -l          # expect 40 categories
+```
+
+**5. On the Pod: install the code and check it.**
+
+```bash
+cd /workspace
+git clone https://github.com/YOUR_GITHUB_USER/E2PN.git
+cd E2PN
+pip install -r requirements.txt
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python -m pytest vgtk/tests
+```
+
+`torch.cuda.is_available()` must print `True`, and the tests should pass. After a Pod stop and restart, run `pip install -r requirements.txt` again.
+
+**6. On the Pod: train.** `nohup` keeps the run alive if your SSH session drops.
+
+```bash
+cd /workspace/E2PN
+nohup python run_modelnet.py experiment --experiment-id cls_s2 --wandb \
+  --model-dir /workspace/models -d /workspace/ModelNet40 \
+  model --flag permutation --kanchor 12 --feat-all-anchors --drop_xyz \
+  > /workspace/train_cls_s2.log 2>&1 &
+
+tail -f /workspace/train_cls_s2.log     # Ctrl-C stops watching, not the training
+nvidia-smi                              # GPU utilisation and memory
+```
+
+Drop `--wandb` to log only to the file. The run length is set in `run_modelnet.py` (`opt.num_iterations = 80000`); edit that line for a shorter run. To stop a run: `pkill -f run_modelnet.py`.
+
+**7. Evaluate a checkpoint (on the Pod).**
+
+```bash
+cd /workspace/E2PN
+ls /workspace/models/cls_s2/*/ckpt/
+python run_modelnet.py experiment --experiment-id cls_s2 --run-mode eval \
+  --model-dir /workspace/models -d /workspace/ModelNet40 \
+  -r /workspace/models/cls_s2/MODEL_DIR/ckpt/cls_s2_net_best.pth \
+  model --flag permutation --kanchor 12 --feat-all-anchors --drop_xyz
+```
+
+**8. On your Mac: download the results, then stop the Pod.**
+
+```bash
+scp -r -P POD_PORT -i ~/.ssh/id_ed25519 root@POD_IP:/workspace/models ~/E2PN_models
+```
+
+Stop or terminate the Pod in the console when you are done; it is billed while it runs. Stopping keeps `/workspace`; terminating deletes it.
 
 ## Citation
 If you find our project useful in your research, please consider citing:

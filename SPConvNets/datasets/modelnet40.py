@@ -12,7 +12,10 @@ from vgtk.functional import rotation_distance_np, label_relative_rotation_np, la
 from scipy.spatial.transform import Rotation as sciR
 
 import matplotlib.pyplot as plt
-import point_cloud_utils as pcu
+try:
+    import point_cloud_utils as pcu
+except ImportError:    # only needed by the voxel (ESCNN baseline) dataloader
+    pcu = None
 import math
 import time
 

@@ -1,6 +1,5 @@
 import math
 import os
-from turtle import forward
 import numpy as np
 import time
 from collections import namedtuple
@@ -204,18 +203,44 @@ class BasicS2ConvV2(nn.Module):
         
         idxs_a = self.trace_idx_rot.transpose(0,1)[None].expand(kernel_size, -1, -1) # a(rotations),a(channels) -> k, a(channels), a(rotations)
 
-        idxs_k = idxs_k[None,None].expand(self.dim_out, self.dim_in, -1,-1,-1)  # c2, c1, k, a(channels), a(rotations)
-        idxs_a = idxs_a[None,None].expand(self.dim_out, self.dim_in, -1,-1,-1)  # c2, c1, k, a(channels), a(rotations)
-        self.register_buffer('idxs_k', idxs_k)  #   c2, c1, k, a(channels), a(rotations)
-        self.register_buffer('idxs_a', idxs_a)  #   c2, c1, k, a(channels), a(rotations)
+        # Kept at their natural size [k, a(channels), a(rotations)] and out of the state_dict.
+        # (They used to be expanded to [c2, c1, k, a, a] and saved: ~2 GB of constant
+        # indices per checkpoint and on the GPU. forward_reference() expands them on the fly.)
+        self.register_buffer('idxs_k', idxs_k.contiguous(), persistent=False)
+        self.register_buffer('idxs_a', idxs_a.contiguous(), persistent=False)
 
-    def forward(self, x):
+        # idx_map pushed through the same two gathers that forward_reference() applies to W:
+        # weight_idx[k, a, r] is the index (in the range 36) of the weight used there.
+        weight_idx = idx_map.view(kernel_size, anchor_size)[..., None].expand(-1, -1, anchor_size)
+        weight_idx = torch.gather(weight_idx, 0, idxs_k)
+        weight_idx = torch.gather(weight_idx, 1, idxs_a)
+        # non-persistent: keeps checkpoints identical to the original format
+        self.register_buffer('weight_idx', weight_idx.reshape(-1).contiguous(), persistent=False)
+
+    def forward_reference(self, x):
+        """Original formulation (two gathers + einsum). Kept as the reference for forward()."""
         W = self.W[:,:,self.idx_map].reshape(self.dim_out, self.dim_in, self.kernel_size, self.anchor_size)    #C2,C1,kernel_size * anchor_size
         W = W[..., None].expand(-1,-1,-1,-1, self.anchor_size)
-        W = torch.gather(W, 2, self.idxs_k)  # c2,c1,k,a(channels),a(rotations) -> c2,c1,k,a(channels),a(rotations)
-        W = torch.gather(W, 3, self.idxs_a)  # c2,c1,k,a(channels),a(rotations) -> c2,c1,k,a(channels permuted),a(rotations)
+        idxs_k = self.idxs_k[None,None].expand(self.dim_out, self.dim_in, -1,-1,-1)
+        idxs_a = self.idxs_a[None,None].expand(self.dim_out, self.dim_in, -1,-1,-1)
+        W = torch.gather(W, 2, idxs_k)  # c2,c1,k,a(channels),a(rotations) -> c2,c1,k,a(channels),a(rotations)
+        W = torch.gather(W, 3, idxs_a)  # c2,c1,k,a(channels),a(rotations) -> c2,c1,k,a(channels permuted),a(rotations)
         x = torch.einsum("dckar, bckpa->bdpr", W, x)
         return x
+
+    def forward(self, x):
+        """Same result as forward_reference(), arranged so it is fast on MPS:
+        the two gathers are folded into one precomputed index (weight_idx), and
+        the einsum is a single batched matmul."""
+        b, _, _, p, _ = x.shape
+        n = self.dim_in * self.kernel_size * self.anchor_size
+        # [c2, c1, k*a*r] -> [c2, r, c1*k*a]
+        W = self.W[:, :, self.weight_idx].view(self.dim_out, self.dim_in, self.kernel_size, self.anchor_size, self.anchor_size)
+        W = W.permute(0, 4, 1, 2, 3).reshape(self.dim_out * self.anchor_size, n)
+        # [b, c1, k, p, a] -> [b, c1*k*a, p]
+        x = x.permute(0, 1, 2, 4, 3).reshape(b, n, p)
+        x = torch.matmul(W, x)                                                  # [b, c2*r, p]
+        return x.view(b, self.dim_out, self.anchor_size, p).permute(0, 1, 3, 2).contiguous()
 
 # Basic SO3Conv
 # [b, c1, k, p, a] -> [b, c2, p, a]

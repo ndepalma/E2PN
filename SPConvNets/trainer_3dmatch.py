@@ -168,8 +168,8 @@ class Trainer(vgtk.Trainer):
     def _print_running_stats(self, step):
         stats = self.summary.get()
         
-        mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-        torch.cuda.reset_peak_memory_stats()
+        mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+        vgtk.ops.reset_peak_memory_stats()
         mem_str = f', Mem: {mem_used_max_GB:.3f}GB'
 
         self.logger.log('Training', f'{step}: {stats}'+mem_str)
@@ -211,7 +211,7 @@ class Trainer(vgtk.Trainer):
             ################### EVAL LOADER ###############################3
             from tqdm import tqdm
             for it, data in enumerate(self.dataset_eval):
-                torch.cuda.reset_peak_memory_stats()
+                vgtk.ops.reset_peak_memory_stats()
 
                 sid = data['sid'].item()
                 # scene = data['scene']
@@ -234,8 +234,8 @@ class Trainer(vgtk.Trainer):
                     feature_buffer.append(feature_np)
                     # print("Batch counter at %d/%d"%(bi, npt), end='\r')
 
-                mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-                torch.cuda.reset_peak_memory_stats()
+                mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+                vgtk.ops.reset_peak_memory_stats()
                 self.logger.log('Generating', f'Mem: {mem_used_max_GB:.3f}GB')
 
                 # target_folder = osp.join('data/evaluate/3DMatch/', self.opt.experiment_id, scene, f'{self.opt.model.output_num}_dim')

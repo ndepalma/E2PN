@@ -10,8 +10,14 @@ import torch.nn.functional as F
 from sklearn.neighbors import KDTree
 from SPConvNets.datasets.evaluation.retrieval import modelnet_retrieval_mAP
 import vgtk.so3conv.functional as L
-from thop import profile
-from fvcore.nn import FlopCountAnalysis
+try:
+    from thop import profile
+except ImportError:     # optional, only used to report FLOPs
+    profile = None
+try:
+    from fvcore.nn import FlopCountAnalysis
+except ImportError:     # optional, only used to report FLOPs
+    FlopCountAnalysis = None
 
 def val(dataset_test, model, metric, best_acc, test_accs, device, logger, info,
         debug_mode, attention_loss, attention_loss_type, att_permute_loss):
@@ -70,8 +76,8 @@ def val(dataset_test, model, metric, best_acc, test_accs, device, logger, info,
     info_print = info if info == '' else info+': '
     logger.log('Testing', info_print+'Best accuracy so far is %.2f!!!!'%(best_acc))
 
-    mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-    torch.cuda.reset_peak_memory_stats()
+    mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+    vgtk.ops.reset_peak_memory_stats()
     logger.log('Testing', f'Mem: {mem_used_max_GB:.3f}GB')
 
     # self.logger.log("Testing", 'Here to peek at the lmc')
@@ -183,16 +189,17 @@ class Trainer(vgtk.Trainer):
         self.logger.log("Training", "Total number of parameters: {}".format(pytorch_total_params))
 
             
-        input = torch.randn(1, 3, 1024).to(self.opt.device)
-        macs, params = profile(self.model, inputs=(input, ))
-        print(
-            "Batch size: 1 | params(M): %.2f | FLOPs(G) %.5f" % (params / (1000 ** 2), macs / (1000 ** 3))
-        )
-        input = torch.randn(12, 3, 1024).to(self.opt.device)
-        macs, params = profile(self.model, inputs=(input, ))
-        print(
-            "Batch size: 12 | params(M): %.2f | FLOPs(G) %.5f" % (params / (1000 ** 2), macs / (1000 ** 3))
-        )
+        if profile is not None:
+            input = torch.randn(1, 3, 1024).to(self.opt.device)
+            macs, params = profile(self.model, inputs=(input, ))
+            print(
+                "Batch size: 1 | params(M): %.2f | FLOPs(G) %.5f" % (params / (1000 ** 2), macs / (1000 ** 3))
+            )
+            input = torch.randn(12, 3, 1024).to(self.opt.device)
+            macs, params = profile(self.model, inputs=(input, ))
+            print(
+                "Batch size: 12 | params(M): %.2f | FLOPs(G) %.5f" % (params / (1000 ** 2), macs / (1000 ** 3))
+            )
         self.profiled = 1 # 0
 
     def _setup_metric(self):
@@ -344,8 +351,8 @@ class Trainer(vgtk.Trainer):
     def _print_running_stats(self, step):
         stats = self.summary.get()
         
-        mem_used_max_GB = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-        torch.cuda.reset_peak_memory_stats()
+        mem_used_max_GB = vgtk.ops.max_memory_allocated_gb()
+        vgtk.ops.reset_peak_memory_stats()
         mem_str = f', Mem: {mem_used_max_GB:.3f}GB'
 
         self.logger.log('Training', f'{step}: {stats}'+mem_str)
@@ -359,7 +366,7 @@ class Trainer(vgtk.Trainer):
         self.logger.log('Testing','Evaluating test set!'+info)
         self.model.eval()
         self.metric.eval()
-        torch.cuda.reset_peak_memory_stats()
+        vgtk.ops.reset_peak_memory_stats()
 
         ################## DEBUG ###############################
         # for module in self.model.modules():
@@ -388,6 +395,9 @@ class Trainer(vgtk.Trainer):
 
         self.model.train()
         self.metric.train()
+
+        tag = f'test/{info}_' if info else 'test/'
+        self.log_metrics({tag + 'acc': mean_acc, tag + 'best_acc': best_acc})
 
         return new_best, best_acc
         

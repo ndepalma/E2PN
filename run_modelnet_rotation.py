@@ -24,6 +24,7 @@ if __name__ == '__main__':
 
         if opt.mode == 'train':
             trainer.train()
-            trainer.writer.close()
+            if hasattr(trainer, 'writer'):
+                trainer.writer.close()
         elif opt.mode == 'eval':
             trainer.eval() 

@@ -1,5 +1,6 @@
 import numpy as np
-import trimesh
+import os
+from types import SimpleNamespace
 from scipy.spatial.transform import Rotation as sciR
 
 
@@ -112,10 +113,27 @@ def rand_rotation_matrix(deflection=1.0, randnums=None, makeT=False):
     else:
         return M
 
+def load_anchor_mesh(mesh_path):
+    """Load the icosahedron used to build the rotation anchors.
+
+    The anchor construction depends on the exact vertex / face-adjacency order
+    that trimesh 3.2 produced for this file (newer trimesh versions order them
+    differently, and split vertices on the texture coordinates). Those arrays
+    are therefore frozen next to the .ply as ``<name>_mesh.npz`` and used when
+    present; trimesh is only a fallback for other meshes.
+    """
+    frozen = os.path.splitext(mesh_path)[0] + '_mesh.npz'
+    if os.path.exists(frozen):
+        with np.load(frozen) as data:
+            return SimpleNamespace(**{k: data[k] for k in data.files})
+    import trimesh
+    mesh = trimesh.load(mesh_path)
+    mesh.fix_normals()
+    return mesh
+
 def get_adjmatrix_trimesh_vtx(mesh, gsize=None):
     """return: nparray of size (12,5) (12,5) (12,)"""
     vertices = mesh.vertices    # 12,3
-    vtx_adj = mesh.edges    # 60*2 (each edge has the reverse pair as well)
     v_neighbors = mesh.vertex_neighbors # 12,5 ndarray
 
     level_2s = []
@@ -173,8 +191,9 @@ def get_so3_from_anchors_np_zyz(face_normals, gsize=3):
     na = face_normals.shape[0]
     cbeta = face_normals[...,-1]
     sbeta = (1 - cbeta**2)**0.5
-    calpha = face_normals[...,0] / sbeta
-    salpha = face_normals[...,1] / sbeta
+    with np.errstate(invalid='ignore', divide='ignore'):     # the poles give 0/0, fixed up just below
+        calpha = face_normals[...,0] / sbeta
+        salpha = face_normals[...,1] / sbeta
 
     if gsize==5:
         calpha = np.where(np.isnan(calpha) & (cbeta>0), np.ones_like(calpha), calpha)
@@ -386,8 +405,7 @@ def get_so3_from_anchors_np(face_normals, gsize=3):
 #     return Rs
 
 def icosahedron_trimesh_to_vertices(mesh_path):
-    mesh = trimesh.load(mesh_path)  # trimesh 3.9 does not work. need 3.2
-    mesh.fix_normals()
+    mesh = load_anchor_mesh(mesh_path)
     vs = mesh.vertices  # each vertex is of norm 1
     vs = np.array(vs)
 
@@ -426,8 +444,7 @@ def icosahedron_so3_trimesh(mesh_path, gsize=3, use_quats=False):
     # 20 faces, 12 vertices
     # root = vgtk.__path__[0]
     # mesh_path = os.path.join(root, 'data', 'anchors/sphere12.ply')
-    mesh = trimesh.load(mesh_path)
-    mesh.fix_normals()
+    mesh = load_anchor_mesh(mesh_path)
     face_idx = mesh.faces
     face_normals = mesh.face_normals
 
@@ -602,7 +619,7 @@ def compute_rotation_matrix_from_quaternion(quaternion):
     def normalize_vector(v, return_mag=False):
         batch=v.shape[0]
         v_mag = torch.sqrt(v.pow(2).sum(1))# batch
-        v_mag = torch.max(v_mag, torch.autograd.Variable(torch.FloatTensor([1e-8]).cuda()))
+        v_mag = v_mag.clamp(min=1e-8)
         v_mag = v_mag.view(batch,1).expand(batch,v.shape[1])
         v = v/v_mag
         if(return_mag==True):
@@ -665,7 +682,7 @@ def compute_rotation_matrix_from_ortho6d(ortho6d):
     def normalize_vector(v, return_mag=False):
         batch=v.shape[0]
         v_mag = torch.sqrt(v.pow(2).sum(1))# batch
-        v_mag = torch.max(v_mag, torch.autograd.Variable(torch.FloatTensor([1e-8]).cuda()))
+        v_mag = v_mag.clamp(min=1e-8)
         v_mag = v_mag.view(batch,1).expand(batch,v.shape[1])
         v = v/v_mag
         if(return_mag==True):
@@ -731,9 +748,10 @@ def so3_mean(Rs, weights=None):
 
 
         Ce = torch.sum(weights * Rs, dim=1)
-        cu, cd, cv = torch.svd(Ce)
-        cvT = cv.transpose(1,2).contiguous()
-        dets = torch.det(torch.matmul(cu, cvT))
+        # SVD / det are tiny 3x3 problems; run them on CPU (not all backends implement them)
+        cu, cd, cvT = torch.linalg.svd(Ce.cpu())
+        dets = torch.linalg.det(torch.matmul(cu, cvT))
+        cu, cvT, dets = cu.to(Rs.device), cvT.contiguous().to(Rs.device), dets.to(Rs.device)
 
         D = mask * dets[:,None,None] + mask2
         return torch.einsum('bij,bjk,bkl->bil', cu, D, cvT)

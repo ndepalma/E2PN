@@ -7,6 +7,7 @@ class Summary():
         self.running_stats = {}
         self.counters = {}
         self.momentum = momentum
+        self.on_update = None   # optional callback(stats, step) with the raw per-step values
 
     def register(self, keys):
         for k in keys:
@@ -21,6 +22,8 @@ class Summary():
             else:
                 self.running_stats[k] = self.momentum * self.running_stats[k] + (1-self.momentum) * v
             self.counters[k] += 1
+        if self.on_update is not None and stats:
+            self.on_update(stats, max(self.counters[k] for k in stats))
 
     def get_item(self, k):
         return self.running_stats[k]
