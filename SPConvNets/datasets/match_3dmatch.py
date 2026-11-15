@@ -1,7 +1,11 @@
 import os
 import sys
 import numpy as np
-import open3d as o3d
+try:
+    import open3d as o3d
+except (ImportError, OSError):
+    # only the 3DMatch loaders need Open3D; ModelNet runs work without it
+    o3d = None
 import torch
 import torch.utils.data as data
 import scipy.io as sio
